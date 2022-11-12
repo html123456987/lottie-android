@@ -195,9 +195,7 @@ public class TextLayer extends BaseLayer {
       // Apply horizontal justification
       applyJustification(documentData.justification, canvas, textLineWidth);
 
-      // Center text vertically
-      float multilineTranslateY = (textLineCount - 1) * lineHeight / 2;
-      float translateY = l * lineHeight - multilineTranslateY;
+      float translateY = l * (documentData.lineHeight - documentData.size) * Utils.dpScale();
       canvas.translate(0, translateY);
 
       // Draw each line
