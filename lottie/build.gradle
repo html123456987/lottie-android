@@ -10,7 +10,8 @@ android {
   resourcePrefix 'lottie_'
   compileSdk 31
   defaultConfig {
-    minSdk 16
+    // DO NOT SUBMIT
+    minSdk 29
     targetSdk 30
     testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
   }

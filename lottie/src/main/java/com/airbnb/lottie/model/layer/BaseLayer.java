@@ -9,7 +9,9 @@ import android.graphics.Path;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffXfermode;
 import android.graphics.RectF;
+import android.graphics.RenderNode;
 import android.os.Build;
+import android.util.Log;
 
 import androidx.annotation.CallSuper;
 import androidx.annotation.FloatRange;
@@ -57,16 +59,16 @@ public abstract class BaseLayer
       case SHAPE:
         return new ShapeLayer(drawable, layerModel, compositionLayer, composition);
       case PRE_COMP:
-        return new CompositionLayer(drawable, layerModel,
+        return new CompositionLayer(drawable, compositionLayer, layerModel,
             composition.getPrecomps(layerModel.getRefId()), composition);
       case SOLID:
-        return new SolidLayer(drawable, layerModel);
+        return new SolidLayer(drawable, compositionLayer, layerModel);
       case IMAGE:
-        return new ImageLayer(drawable, layerModel);
+        return new ImageLayer(drawable, compositionLayer, layerModel);
       case NULL:
-        return new NullLayer(drawable, layerModel);
+        return new NullLayer(drawable, compositionLayer, layerModel);
       case TEXT:
-        return new TextLayer(drawable, layerModel);
+        return new TextLayer(drawable, compositionLayer, layerModel);
       case UNKNOWN:
       default:
         // Do nothing
@@ -115,9 +117,11 @@ public abstract class BaseLayer
 
   float blurMaskFilterRadius = 0f;
   @Nullable BlurMaskFilter blurMaskFilter;
+  @Nullable protected final CompositionLayer compositionLayer;
 
-  BaseLayer(LottieDrawable lottieDrawable, Layer layerModel) {
+  BaseLayer(LottieDrawable lottieDrawable, @Nullable CompositionLayer compositionLayer, Layer layerModel) {
     this.lottieDrawable = lottieDrawable;
+    this.compositionLayer = compositionLayer;
     this.layerModel = layerModel;
     drawTraceName = layerModel.getName() + "#draw";
     if (layerModel.getMatteType() == Layer.MatteType.INVERT) {
@@ -190,8 +194,16 @@ public abstract class BaseLayer
     }
   }
 
-  private void invalidateSelf() {
-    lottieDrawable.invalidateSelf();
+  protected boolean isInvalid = false;
+
+  protected void invalidateSelf() {
+    isInvalid = true;
+    if (compositionLayer == null) {
+      // TODO: do this via inheritance.
+      lottieDrawable.invalidateSelf();
+    } else {
+      compositionLayer.invalidateSelf();
+    }
   }
 
   public void addAnimation(@Nullable BaseKeyframeAnimation<?, ?> newAnimation) {
@@ -226,13 +238,41 @@ public abstract class BaseLayer
     boundsMatrix.preConcat(transform.getMatrix());
   }
 
+
+  RenderNode renderNode;
+  String renderNodeName;
+
   @Override
-  public void draw(Canvas canvas, Matrix parentMatrix, int parentAlpha) {
+  public void draw(Canvas originalCanvas, Matrix parentMatrix, int parentAlpha) {
     L.beginSection(drawTraceName);
     if (!visible || layerModel.isHidden()) {
       L.endSection(drawTraceName);
       return;
     }
+    if (renderNode == null) {
+      renderNodeName = layerModel.getId() + ":" + layerModel.getName();
+      if (parentLayers != null) {
+        for (BaseLayer layer : parentLayers) {
+          renderNodeName += "_" + layer.getName();
+        }
+      }
+      renderNode = new RenderNode(renderNodeName);
+    }
+
+    if (renderNode.hasDisplayList() && !isInvalid) {
+      Log.d("Gabe", "Reusing " + renderNodeName);
+      originalCanvas.drawRenderNode(renderNode);
+      return;
+    }
+
+    Log.d("Gabe", "Redrawing " + renderNodeName);
+
+    // TODO: use getBounds()?
+    renderNode.setPosition(layerModel.getComposition().getBounds());
+    // RectF bounds = new RectF();
+    // getBounds(bounds, parentMatrix, true);
+    // renderNode.setPosition((int) bounds.left, (int) bounds.top, (int) bounds.right, (int) bounds.bottom);
+    Canvas canvas = renderNode.beginRecording();
     buildParentLayerListIfNeeded();
     L.beginSection("Layer#parentMatrix");
     matrix.reset();
@@ -249,7 +289,10 @@ public abstract class BaseLayer
       L.beginSection("Layer#drawLayer");
       drawLayer(canvas, matrix, alpha);
       L.endSection("Layer#drawLayer");
+      renderNode.endRecording();
+      originalCanvas.drawRenderNode(renderNode);
       recordRenderTime(L.endSection(drawTraceName));
+      isInvalid = false;
       return;
     }
 
@@ -324,6 +367,10 @@ public abstract class BaseLayer
       outlineMasksAndMattesPaint.setColor(0x50EBEBEB);
       canvas.drawRect(rect, outlineMasksAndMattesPaint);
     }
+
+    renderNode.endRecording();
+    canvas.drawRenderNode(renderNode);
+    isInvalid = false;
 
     recordRenderTime(L.endSection(drawTraceName));
   }
