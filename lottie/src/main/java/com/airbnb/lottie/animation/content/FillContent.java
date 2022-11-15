@@ -77,7 +77,7 @@ public class FillContent
   }
 
   @Override public void onValueChanged() {
-    lottieDrawable.invalidateSelf();
+    layer.invalidateSelf();
   }
 
   @Override public void setContents(List<Content> contentsBefore, List<Content> contentsAfter) {

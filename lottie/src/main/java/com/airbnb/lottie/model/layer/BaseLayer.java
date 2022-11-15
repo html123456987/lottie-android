@@ -196,13 +196,24 @@ public abstract class BaseLayer
 
   protected boolean isInvalid = false;
 
-  protected void invalidateSelf() {
+  public void invalidateSelf() {
     isInvalid = true;
     if (compositionLayer == null) {
       // TODO: do this via inheritance.
       lottieDrawable.invalidateSelf();
     } else {
       compositionLayer.invalidateSelf();
+    }
+    if (parentLayer != null) {
+      parentLayer.invalidateSelf();
+    }
+    if (parentLayers != null) {
+      for (BaseLayer layer : parentLayers) {
+        layer.invalidateSelf();
+      }
+    }
+    if (matteLayer != null) {
+      matteLayer.invalidateSelf();
     }
   }
 
@@ -241,6 +252,7 @@ public abstract class BaseLayer
 
   RenderNode renderNode;
   String renderNodeName;
+  private final Matrix lastDrawnMatrix = new Matrix();
 
   @Override
   public void draw(Canvas originalCanvas, Matrix parentMatrix, int parentAlpha) {
@@ -259,20 +271,7 @@ public abstract class BaseLayer
       renderNode = new RenderNode(renderNodeName);
     }
 
-    if (renderNode.hasDisplayList() && !isInvalid) {
-      Log.d("Gabe", "Reusing " + renderNodeName);
-      originalCanvas.drawRenderNode(renderNode);
-      return;
-    }
-
     Log.d("Gabe", "Redrawing " + renderNodeName);
-
-    // TODO: use getBounds()?
-    renderNode.setPosition(layerModel.getComposition().getBounds());
-    // RectF bounds = new RectF();
-    // getBounds(bounds, parentMatrix, true);
-    // renderNode.setPosition((int) bounds.left, (int) bounds.top, (int) bounds.right, (int) bounds.bottom);
-    Canvas canvas = renderNode.beginRecording();
     buildParentLayerListIfNeeded();
     L.beginSection("Layer#parentMatrix");
     matrix.reset();
@@ -286,8 +285,18 @@ public abstract class BaseLayer
         ((parentAlpha / 255f * (float) opacity / 100f) * 255);
     if (!hasMatteOnThisLayer() && !hasMasksOnThisLayer()) {
       matrix.preConcat(transform.getMatrix());
+
+      if (renderNode.hasDisplayList() && !isInvalid && matrix.equals(lastDrawnMatrix)) {
+        Log.d("Gabe", "Reusing " + renderNodeName);
+        originalCanvas.drawRenderNode(renderNode);
+        return;
+      }
+      renderNode.setPosition(layerModel.getComposition().getBounds());
+      Canvas recordingCanvas = renderNode.beginRecording();
+
       L.beginSection("Layer#drawLayer");
-      drawLayer(canvas, matrix, alpha);
+      lastDrawnMatrix.set(matrix);
+      drawLayer(recordingCanvas, matrix, alpha);
       L.endSection("Layer#drawLayer");
       renderNode.endRecording();
       originalCanvas.drawRenderNode(renderNode);
@@ -304,12 +313,20 @@ public abstract class BaseLayer
     matrix.preConcat(transform.getMatrix());
     intersectBoundsWithMask(rect, matrix);
 
+    if (renderNode.hasDisplayList() && !isInvalid && matrix.equals(lastDrawnMatrix)) {
+      Log.d("Gabe", "Reusing " + renderNodeName);
+      originalCanvas.drawRenderNode(renderNode);
+      return;
+    }
+    renderNode.setPosition(layerModel.getComposition().getBounds());
+    Canvas recordingCanvas = renderNode.beginRecording();
+
     // Intersect the mask and matte rect with the canvas bounds.
     // If the canvas has a transform, then we need to transform its bounds by its matrix
     // so that we know the coordinate space that the canvas is showing.
-    canvasBounds.set(0f, 0f, canvas.getWidth(), canvas.getHeight());
+    canvasBounds.set(0f, 0f, recordingCanvas.getWidth(), recordingCanvas.getHeight());
     //noinspection deprecation
-    canvas.getMatrix(canvasMatrix);
+    recordingCanvas.getMatrix(canvasMatrix);
     if (!canvasMatrix.isIdentity()) {
       canvasMatrix.invert(canvasMatrix);
       canvasMatrix.mapRect(canvasBounds);
@@ -326,35 +343,35 @@ public abstract class BaseLayer
     if (rect.width() >= 1f && rect.height() >= 1f) {
       L.beginSection("Layer#saveLayer");
       contentPaint.setAlpha(255);
-      Utils.saveLayerCompat(canvas, rect, contentPaint);
+      Utils.saveLayerCompat(recordingCanvas, rect, contentPaint);
       L.endSection("Layer#saveLayer");
 
       // Clear the off screen buffer. This is necessary for some phones.
-      clearCanvas(canvas);
+      clearCanvas(recordingCanvas);
       L.beginSection("Layer#drawLayer");
-      drawLayer(canvas, matrix, alpha);
+      drawLayer(recordingCanvas, matrix, alpha);
       L.endSection("Layer#drawLayer");
 
       if (hasMasksOnThisLayer()) {
-        applyMasks(canvas, matrix);
+        applyMasks(recordingCanvas, matrix);
       }
 
       if (hasMatteOnThisLayer()) {
         L.beginSection("Layer#drawMatte");
         L.beginSection("Layer#saveLayer");
-        Utils.saveLayerCompat(canvas, rect, mattePaint, SAVE_FLAGS);
+        Utils.saveLayerCompat(recordingCanvas, rect, mattePaint, SAVE_FLAGS);
         L.endSection("Layer#saveLayer");
-        clearCanvas(canvas);
+        clearCanvas(recordingCanvas);
         //noinspection ConstantConditions
-        matteLayer.draw(canvas, parentMatrix, alpha);
+        matteLayer.draw(recordingCanvas, parentMatrix, alpha);
         L.beginSection("Layer#restoreLayer");
-        canvas.restore();
+        recordingCanvas.restore();
         L.endSection("Layer#restoreLayer");
         L.endSection("Layer#drawMatte");
       }
 
       L.beginSection("Layer#restoreLayer");
-      canvas.restore();
+      recordingCanvas.restore();
       L.endSection("Layer#restoreLayer");
     }
 
@@ -362,15 +379,16 @@ public abstract class BaseLayer
       outlineMasksAndMattesPaint.setStyle(Paint.Style.STROKE);
       outlineMasksAndMattesPaint.setColor(0xFFFC2803);
       outlineMasksAndMattesPaint.setStrokeWidth(4);
-      canvas.drawRect(rect, outlineMasksAndMattesPaint);
+      recordingCanvas.drawRect(rect, outlineMasksAndMattesPaint);
       outlineMasksAndMattesPaint.setStyle(Paint.Style.FILL);
       outlineMasksAndMattesPaint.setColor(0x50EBEBEB);
-      canvas.drawRect(rect, outlineMasksAndMattesPaint);
+      recordingCanvas.drawRect(rect, outlineMasksAndMattesPaint);
     }
 
     renderNode.endRecording();
-    canvas.drawRenderNode(renderNode);
+    originalCanvas.drawRenderNode(renderNode);
     isInvalid = false;
+    lastDrawnMatrix.set(matrix);
 
     recordRenderTime(L.endSection(drawTraceName));
   }
